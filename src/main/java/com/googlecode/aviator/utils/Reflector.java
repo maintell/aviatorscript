@@ -22,6 +22,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -30,7 +31,10 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import com.googlecode.aviator.AviatorEvaluatorInstance;
 import com.googlecode.aviator.Feature;
+import com.googlecode.aviator.annotation.Function;
+import com.googlecode.aviator.annotation.Ignore;
 import com.googlecode.aviator.exception.NoSuchPropertyException;
+import com.googlecode.aviator.parser.ExpressionParser;
 import com.googlecode.aviator.runtime.RuntimeUtils;
 import com.googlecode.aviator.runtime.function.ClassMethodFunction;
 import com.googlecode.aviator.runtime.type.AviatorJavaType;
@@ -133,9 +137,13 @@ public class Reflector {
 
   }
 
+
   public static StringBuilder capitalize(final StringBuilder sb, final String s) {
     if (s == null) {
       return sb;
+    }
+    if (s.length() > 1 && Character.isUpperCase(s.charAt(1))) {
+      return sb.append(s);
     }
     sb.append(s.substring(0, 1).toUpperCase());
     sb.append(s.substring(1));
@@ -793,6 +801,9 @@ public class Reflector {
 
       if (target.innerClazz != null) {
         final AviatorEvaluatorInstance instance = RuntimeUtils.getInstance(env);
+        // check innerClazz is allowed
+        instance.checkIfClassIsAllowed(true, target.innerClazz);
+
         if (tryResolveStaticMethod && instance.isFeatureEnabled(Feature.StaticMethods)
             && names.length == 2) {
           val = fastGetProperty(target.innerClazz, rName, PropertyType.StaticMethod);
@@ -865,5 +876,51 @@ public class Reflector {
       }
     }
     return throwNoSuchPropertyException("Variable `" + name + "` not found in env: " + env);
+  }
+
+  public static Map<String, List<Method>> findMethodsFromClass(final Class<?> clazz,
+      final boolean isStatic) {
+    Map<String, List<Method>> methodMap = new HashMap<>();
+
+    for (Method method : clazz.getMethods()) {
+      int modifiers = method.getModifiers();
+      if (Modifier.isPublic(modifiers)) {
+        if (isStatic) {
+          if (!Modifier.isStatic(modifiers)) {
+            continue;
+          }
+        } else {
+          if (Modifier.isStatic(modifiers)) {
+            continue;
+          }
+        }
+
+        if (method.getAnnotation(Ignore.class) != null) {
+          continue;
+        }
+
+        String methodName = method.getName();
+        Function func = method.getAnnotation(Function.class);
+        if (func != null) {
+          String rename = func.rename();
+          if (!rename.isEmpty()) {
+            if (!ExpressionParser.isJavaIdentifier(rename)) {
+              throw new IllegalArgumentException("Invalid rename `" + rename + "` for method "
+                  + method.getName() + " in class " + clazz);
+            }
+            methodName = func.rename();
+          }
+        }
+
+        List<Method> methods = methodMap.get(methodName);
+        if (methods == null) {
+          methods = new ArrayList<>(3);
+          methodMap.put(methodName, methods);
+        }
+        methods.add(method);
+      }
+    }
+
+    return methodMap;
   }
 }
